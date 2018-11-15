@@ -3,9 +3,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
-import il.ac.bgu.cs.fvm.exceptions.FVMException;
-import il.ac.bgu.cs.fvm.exceptions.InvalidLablingPairException;
-import il.ac.bgu.cs.fvm.exceptions.StateNotFoundException;
+
+import il.ac.bgu.cs.fvm.exceptions.*;
 import il.ac.bgu.cs.fvm.transitionsystem.Transition;
 import il.ac.bgu.cs.fvm.transitionsystem.TransitionSystem;
 
@@ -36,7 +35,7 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
 	public void setInitial(STATE aState, boolean isInitial) throws StateNotFoundException {
 		if(!states.containsKey(aState))
 			throw new StateNotFoundException(aState);
-		states.put(aState, new Tuple<Boolean, Set<ATOMIC_PROPOSITION>>(isInitial, new HashSet<ATOMIC_PROPOSITION>()));
+		states.put(aState, new Tuple<Boolean, Set<ATOMIC_PROPOSITION>>(isInitial, states.get(aState).second));
 	}
 
 	@Override
@@ -47,7 +46,7 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
 	@Override
 	public void addTransition(Transition<STATE, ACTION> t) throws FVMException {
 		if(!states.containsKey(t.getFrom()) || !states.containsKey(t.getTo()) || !actions.contains(t.getAction()))
-			throw new FVMException("illegal transition");
+			throw new InvalidTransitionException(t);
 		transitions.add(t);
 	}
 
@@ -75,7 +74,9 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
 
 	@Override
 	public Set<ATOMIC_PROPOSITION> getLabel(STATE s) {
-		return states.get(s).second;
+		if(!states.containsKey(s))
+			throw new StateNotFoundException(s);
+		return new HashSet<ATOMIC_PROPOSITION>(states.get(s).second);
 	}
 
 	@Override
@@ -101,13 +102,17 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
 	
 	@Override
 	public Set<Transition<STATE, ACTION>> getTransitions() {
-		return this.transitions;
+		return new HashSet<Transition<STATE, ACTION>>(this.transitions);
+//		return this.transitions;
 	}
 
 	@Override
 	public void removeAction(ACTION action) throws FVMException {
 		if(!actions.contains(action))
 			throw new FVMException("Invalid action");
+		for(Transition<STATE, ACTION> t : transitions)
+			if(t.getAction().equals(action))
+				throw new DeletionOfAttachedActionException(action, TransitionSystemPart.ACTIONS);
 		actions.remove(action);
 	}
 
@@ -115,8 +120,10 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
 	public void removeAtomicProposition(ATOMIC_PROPOSITION p) throws FVMException {
 		if (!aps.contains(p)) 
 			throw new FVMException("Invalid atomic proposition");
+		states.forEach((key,value) -> {if (value.second.remove(p))
+											throw new DeletionOfAttachedAtomicPropositionException(p, TransitionSystemPart.ATOMIC_PROPOSITIONS); });
 		aps.remove(p);
-		states.forEach((key,value) -> value.second.remove(p));		
+
 	}
 
 	@Override
@@ -128,7 +135,14 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
 	public void removeState(STATE state) throws FVMException {
 		if (!states.containsKey(state))
 			throw new FVMException("Invalid state");
-		states.remove(state);	
+		if (states.get(state).first)
+			throw new DeletionOfAttachedStateException(state, TransitionSystemPart.INITIAL_STATES);
+		for(Transition<STATE, ACTION> t : transitions)
+			if(t.getTo().equals(state) || t.getFrom().equals(state))
+				throw new DeletionOfAttachedStateException(state, TransitionSystemPart.STATES);
+		if(!states.get(state).second.isEmpty())
+			throw new DeletionOfAttachedStateException(state, TransitionSystemPart.LABELING_FUNCTION);
+		states.remove(state);
 	}
 
 	@Override

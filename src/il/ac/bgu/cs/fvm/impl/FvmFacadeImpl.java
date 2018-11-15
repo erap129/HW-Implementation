@@ -5,6 +5,7 @@ import il.ac.bgu.cs.fvm.automata.Automaton;
 import il.ac.bgu.cs.fvm.automata.MultiColorAutomaton;
 import il.ac.bgu.cs.fvm.channelsystem.ChannelSystem;
 import il.ac.bgu.cs.fvm.circuits.Circuit;
+import il.ac.bgu.cs.fvm.exceptions.ActionNotFoundException;
 import il.ac.bgu.cs.fvm.exceptions.StateNotFoundException;
 import il.ac.bgu.cs.fvm.ltl.LTL;
 import il.ac.bgu.cs.fvm.programgraph.ActionDef;
@@ -16,11 +17,7 @@ import il.ac.bgu.cs.fvm.transitionsystem.TransitionSystem;
 import il.ac.bgu.cs.fvm.util.Pair;
 import il.ac.bgu.cs.fvm.verification.VerificationResult;
 import java.io.InputStream;
-import java.util.HashSet;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.function.Consumer;
 
 /**
@@ -76,7 +73,7 @@ public class FvmFacadeImpl implements FvmFacade {
     
     @Override
     public <S, A, P> boolean isExecution(TransitionSystem<S, A, P> ts, AlternatingSequence<S, A> e) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement isExecution
+        return isInitialExecutionFragment(ts, e) && isMaximalExecutionFragment(ts, e);
     }
 
     @Override
@@ -99,7 +96,10 @@ public class FvmFacadeImpl implements FvmFacade {
     }
     
     private <S, A, P> boolean checkTransition(S state1, A action, S state2, TransitionSystem<S, A, P> ts){
-    	for(Transition<S, A> t : ts.getTransitions()){
+    	checkState(ts, state1);
+		checkState(ts, state2);
+		checkAction(ts, action);
+		for(Transition<S, A> t : ts.getTransitions()){
     		if(t.getFrom().equals(state1) && t.getAction().equals(action) && t.getTo().equals(state2))
     			return true;
     	}
@@ -108,12 +108,12 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <S, A, P> boolean isInitialExecutionFragment(TransitionSystem<S, A, P> ts, AlternatingSequence<S, A> e) {
-        return ts.getInitialStates().contains(e.head()) && isExecution(ts, e);
+        return ts.getInitialStates().contains(e.head()) && isExecutionFragment(ts, e);
     }
 
     @Override
     public <S, A, P> boolean isMaximalExecutionFragment(TransitionSystem<S, A, P> ts, AlternatingSequence<S, A> e) {
-        return post(ts, e.last()).size() == 0 && isExecution(ts, e);
+        return post(ts, e.last()).size() == 0 && isExecutionFragment(ts, e);
     }
 
     @Override
@@ -123,8 +123,7 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <S> Set<S> post(TransitionSystem<S, ?, ?> ts, S s) throws StateNotFoundException{
-    	if(!ts.getStates().contains(s))
-    		throw new StateNotFoundException(s);
+    	checkState(ts, s);
     	Set<S> res = new HashSet<S>(); 
 		for (Transition<S, ?> trans : ts.getTransitions())
 			if (trans.getFrom().equals(s))
@@ -159,8 +158,7 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <S> Set<S> pre(TransitionSystem<S, ?, ?> ts, S s) throws StateNotFoundException {
-		if(!ts.getStates().contains(s))
-			throw new StateNotFoundException(s);
+		checkState(ts, s);
     	Set<S> res = new HashSet<S>(); 
 		for (Transition<S, ?> trans : ts.getTransitions())
 			if (trans.getTo().equals(s))
@@ -198,6 +196,7 @@ public class FvmFacadeImpl implements FvmFacade {
     	Set<S> res = new HashSet<S>(); 
     	for(S state : ts.getInitialStates())
     		addAllReachable(res, ts, state);
+    	res.addAll(ts.getInitialStates());
     	return res;
     }
     
@@ -237,24 +236,49 @@ public class FvmFacadeImpl implements FvmFacade {
 				if(ts1.getInitialStates().contains(s1) && ts2.getInitialStates().contains(s2))
 					ts.setInitial(state_pair, true);
 			}
-		for(Transition<S1, A> t : ts1.getTransitions()){
-			for(Pair<S1, S2> state_pair : ts.getStates()){
-				if(t.getFrom().equals(state_pair.first)){
+//		for(Transition<S1, A> t : ts1.getTransitions()){
+//			for(Pair<S1, S2> state_pair : ts.getStates()){
+//				if(t.getFrom().equals(state_pair.first)){
+//					for(Pair<S1, S2> to_state_pair : ts.getStates())
+//						if(to_state_pair.first.equals(t.getTo()) && state_pair.second.equals(to_state_pair.second)){
+//							ts.addTransition(new Transition<Pair<S1, S2>, A>(getStatePair(ts, state_pair.first, state_pair.second), t.getAction(),
+//									getStatePair(ts, to_state_pair.first, to_state_pair.second)));
+//						}
+//				}
+//				if(t.getFrom().equals(state_pair.second)){
+//					for(Pair<S1, S2> to_state_pair : ts.getStates())
+//						if(to_state_pair.second.equals(t.getTo()) && state_pair.first.equals(to_state_pair.first)){
+//							ts.addTransition(new Transition<Pair<S1, S2>, A>(getStatePair(ts, state_pair.first, state_pair.second), t.getAction(),
+//									getStatePair(ts, to_state_pair.first, to_state_pair.second)));
+//						}
+//				}
+//			}
+//		}
+		for(Transition<S1, A> t : ts1.getTransitions())
+			for(Pair<S1, S2> state_pair : ts.getStates())
+				if(t.getFrom().equals(state_pair.first))
 					for(Pair<S1, S2> to_state_pair : ts.getStates())
-						if(to_state_pair.first.equals(t.getTo())){
+						if(to_state_pair.first.equals(t.getTo()) && state_pair.second.equals(to_state_pair.second))
 							ts.addTransition(new Transition<Pair<S1, S2>, A>(getStatePair(ts, state_pair.first, state_pair.second), t.getAction(),
 									getStatePair(ts, to_state_pair.first, to_state_pair.second)));
-						}		
-				}
-				if(t.getFrom().equals(state_pair.second)){
-					for(Pair<S1, S2> to_state_pair : ts.getStates())
-						if(to_state_pair.second.equals(t.getTo())){
+
+		for(Transition<S2, A> t : ts2.getTransitions())
+			for (Pair<S1, S2> state_pair : ts.getStates())
+				if (t.getFrom().equals(state_pair.second))
+					for (Pair<S1, S2> to_state_pair : ts.getStates())
+						if (to_state_pair.second.equals(t.getTo()) && state_pair.first.equals(to_state_pair.first))
 							ts.addTransition(new Transition<Pair<S1, S2>, A>(getStatePair(ts, state_pair.first, state_pair.second), t.getAction(),
 									getStatePair(ts, to_state_pair.first, to_state_pair.second)));
-						}		
-				}
+
+		Set<Pair<S1, S2>> reach_states = reach(ts);
+		for(Pair<S1, S2> state_pair : ts.getStates())
+			if(!reach_states.contains(state_pair)) {
+				for (Transition<Pair<S1, S2>, A> t : ts.getTransitions())
+					if (t.getFrom().equals(state_pair) || t.getTo().equals(state_pair))
+						ts.removeTransition(t);
+				ts.removeState(state_pair);
 			}
-		}
+
 		return ts;
     }
 
@@ -280,26 +304,25 @@ public class FvmFacadeImpl implements FvmFacade {
 				if(ts1.getInitialStates().contains(s1) && ts2.getInitialStates().contains(s2))
 					ts.setInitial(state_pair, true);
 			}
-		for(Transition<S1, A> t : ts1.getTransitions()){
-			for(Pair<S1, S2> state_pair : ts.getStates()){
-				if(t.getFrom().equals(state_pair.first)){
+
+		for(Transition<S1, A> t : ts1.getTransitions())
+			for(Pair<S1, S2> state_pair : ts.getStates())
+				if(t.getFrom().equals(state_pair.first))
 					for(Pair<S1, S2> to_state_pair : ts.getStates())
-						if(to_state_pair.first.equals(t.getTo())){
-							if(!handShakingActions.contains(t.getAction()))
+						if(to_state_pair.first.equals(t.getTo()))
+							if(!handShakingActions.contains(t.getAction()) && state_pair.second.equals(to_state_pair.second))
 								ts.addTransition(new Transition<Pair<S1, S2>, A>(getStatePair(ts, state_pair.first, state_pair.second), t.getAction(),
 										getStatePair(ts, to_state_pair.first, to_state_pair.second)));
-						}		
-				}
-				if(t.getFrom().equals(state_pair.second)){
-					for(Pair<S1, S2> to_state_pair : ts.getStates())
-						if(to_state_pair.second.equals(t.getTo())){
-							if(!handShakingActions.contains(t.getAction()))
+
+		for(Transition<S2, A> t : ts2.getTransitions())
+			for (Pair<S1, S2> state_pair : ts.getStates())
+				if (t.getFrom().equals(state_pair.second))
+					for (Pair<S1, S2> to_state_pair : ts.getStates())
+						if (to_state_pair.second.equals(t.getTo()))
+							if (!handShakingActions.contains(t.getAction()) && state_pair.first.equals(to_state_pair.first))
 								ts.addTransition(new Transition<Pair<S1, S2>, A>(getStatePair(ts, state_pair.first, state_pair.second), t.getAction(),
 										getStatePair(ts, to_state_pair.first, to_state_pair.second)));
-						}		
-				}
-			}
-		}
+
 		for(A action : handShakingActions)
 			for(Transition<S1, A> t1 : ts1.getTransitions())
 				if(t1.getAction().equals(action))
@@ -307,6 +330,15 @@ public class FvmFacadeImpl implements FvmFacade {
 						if(t2.getAction().equals(action))
 							ts.addTransition(new Transition<Pair<S1, S2>, A>(getStatePair(ts, t1.getFrom(), t2.getFrom()), action,
 									getStatePair(ts, t1.getTo(), t2.getTo())));
+		Set<Pair<S1, S2>> reach_states = reach(ts);
+
+		for(Pair<S1, S2> state_pair : ts.getStates())
+			if(!reach_states.contains(state_pair)) {
+				for (Transition<Pair<S1, S2>, A> t : ts.getTransitions())
+					if (t.getFrom().equals(state_pair) || t.getTo().equals(state_pair))
+						ts.removeTransition(t);
+				ts.removeState(state_pair);
+			}
 
 		return ts;
     }
@@ -321,9 +353,53 @@ public class FvmFacadeImpl implements FvmFacade {
         throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement interleave
     }
 
+	private boolean[] convertToBinary(int no, int num_of_inputs){
+		boolean container[] = new boolean[num_of_inputs];
+		int i = 1;
+		while (no > 0){
+			container[container.length - i] = no%2 == 0;
+			i++;
+			no = no/2;
+		}
+		return container;
+	}
     @Override
     public TransitionSystem<Pair<Map<String, Boolean>, Map<String, Boolean>>, Map<String, Boolean>, Object> transitionSystemFromCircuit(Circuit c) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement transitionSystemFromCircuit
+		TransitionSystem<Pair<Map<String, Boolean>, Map<String, Boolean>>, Map<String, Boolean>, Object> res = new TransitionSystemImpl<>();
+    	for(int i=0; i<c.getInputPortNames().size(); i++){
+			Set<String> aps = new HashSet<String>();
+    		Map<String, Boolean> xs = new HashMap<>();
+			boolean[] bin_array_x = convertToBinary(i, c.getInputPortNames().size());
+			String[] input_arr_x = (String[])c.getInputPortNames().toArray();
+			for(int j=0; j<bin_array_x.length; j++) {
+				xs.put(input_arr_x[j], bin_array_x[j]);
+				if(bin_array_x[j])
+					aps.add(input_arr_x[j]);
+			}
+			Map<String, Boolean> rs = new HashMap<>();
+			for(int k=0; k<c.getRegisterNames().size(); k++) {
+				boolean[] bin_array_reg = convertToBinary(k, c.getInputPortNames().size());
+				String[] input_arr_reg = (String[]) c.getRegisterNames().toArray();
+				for (int l = 0; l < bin_array_reg.length; l++) {
+					rs.put(input_arr_reg[l], bin_array_reg[l]);
+					if (bin_array_reg[l])
+						aps.add(input_arr_reg[l]);
+				}
+				Map<String, Boolean> outputs = c.computeOutputs(xs, rs);
+				Pair<Map<String, Boolean>, Map<String, Boolean>> curr_state = new Pair<>(rs, outputs);
+				res.addState(curr_state);
+				res.addAtomicProposition(aps);
+				res.addToLabel(curr_state, aps);
+			}
+		}
+		for(Pair<Map<String, Boolean>, Map<String, Boolean>> state : res.getStates()){
+    		boolean isInitial = true;
+    		for(boolean val : state.second.values())
+				if(val)
+					isInitial = false;
+    		if(isInitial)
+    			res.setInitial(state, true);
+		}
     }
 
     @Override
@@ -370,5 +446,15 @@ public class FvmFacadeImpl implements FvmFacade {
     public <L> Automaton<?, L> GNBA2NBA(MultiColorAutomaton<?, L> mulAut) {
         throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement GNBA2NBA
     }
+
+    private <S> void checkState(TransitionSystem<S, ?, ?> ts, S state){
+		if(!ts.getStates().contains(state))
+			throw new StateNotFoundException(state);
+	}
+
+	private <A> void checkAction(TransitionSystem<?, A, ?> ts, A action){
+		if(!ts.getActions().contains(action))
+			throw new ActionNotFoundException(action);
+	}
    
 }
