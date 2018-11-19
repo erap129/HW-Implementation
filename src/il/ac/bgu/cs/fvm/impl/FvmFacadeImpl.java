@@ -16,6 +16,8 @@ import il.ac.bgu.cs.fvm.transitionsystem.Transition;
 import il.ac.bgu.cs.fvm.transitionsystem.TransitionSystem;
 import il.ac.bgu.cs.fvm.util.Pair;
 import il.ac.bgu.cs.fvm.verification.VerificationResult;
+
+import javax.naming.event.ObjectChangeListener;
 import java.io.InputStream;
 import java.util.*;
 import java.util.function.Consumer;
@@ -236,24 +238,7 @@ public class FvmFacadeImpl implements FvmFacade {
 				if(ts1.getInitialStates().contains(s1) && ts2.getInitialStates().contains(s2))
 					ts.setInitial(state_pair, true);
 			}
-//		for(Transition<S1, A> t : ts1.getTransitions()){
-//			for(Pair<S1, S2> state_pair : ts.getStates()){
-//				if(t.getFrom().equals(state_pair.first)){
-//					for(Pair<S1, S2> to_state_pair : ts.getStates())
-//						if(to_state_pair.first.equals(t.getTo()) && state_pair.second.equals(to_state_pair.second)){
-//							ts.addTransition(new Transition<Pair<S1, S2>, A>(getStatePair(ts, state_pair.first, state_pair.second), t.getAction(),
-//									getStatePair(ts, to_state_pair.first, to_state_pair.second)));
-//						}
-//				}
-//				if(t.getFrom().equals(state_pair.second)){
-//					for(Pair<S1, S2> to_state_pair : ts.getStates())
-//						if(to_state_pair.second.equals(t.getTo()) && state_pair.first.equals(to_state_pair.first)){
-//							ts.addTransition(new Transition<Pair<S1, S2>, A>(getStatePair(ts, state_pair.first, state_pair.second), t.getAction(),
-//									getStatePair(ts, to_state_pair.first, to_state_pair.second)));
-//						}
-//				}
-//			}
-//		}
+
 		for(Transition<S1, A> t : ts1.getTransitions())
 			for(Pair<S1, S2> state_pair : ts.getStates())
 				if(t.getFrom().equals(state_pair.first))
@@ -330,8 +315,8 @@ public class FvmFacadeImpl implements FvmFacade {
 						if(t2.getAction().equals(action))
 							ts.addTransition(new Transition<Pair<S1, S2>, A>(getStatePair(ts, t1.getFrom(), t2.getFrom()), action,
 									getStatePair(ts, t1.getTo(), t2.getTo())));
-		Set<Pair<S1, S2>> reach_states = reach(ts);
 
+		Set<Pair<S1, S2>> reach_states = reach(ts);
 		for(Pair<S1, S2> state_pair : ts.getStates())
 			if(!reach_states.contains(state_pair)) {
 				for (Transition<Pair<S1, S2>, A> t : ts.getTransitions())
@@ -357,54 +342,99 @@ public class FvmFacadeImpl implements FvmFacade {
 		boolean container[] = new boolean[num_of_inputs];
 		int i = 1;
 		while (no > 0){
-			container[container.length - i] = no%2 == 0;
+			container[container.length - i] = no%2 != 0;
 			i++;
 			no = no/2;
 		}
 		return container;
 	}
+
     @Override
     public TransitionSystem<Pair<Map<String, Boolean>, Map<String, Boolean>>, Map<String, Boolean>, Object> transitionSystemFromCircuit(Circuit c) {
 		TransitionSystem<Pair<Map<String, Boolean>, Map<String, Boolean>>, Map<String, Boolean>, Object> res = new TransitionSystemImpl<>();
-    	for(int i=0; i<c.getInputPortNames().size(); i++){
-			Set<String> aps = new HashSet<String>();
+		for(String x : c.getInputPortNames())
+			res.addAtomicProposition(x);
+		for(String r : c.getRegisterNames())
+			res.addAtomicProposition(r);
+		for(String y : c.getOutputPortNames())
+			res.addAtomicProposition(y);
+		for(int i=0; i<Math.pow(2, c.getInputPortNames().size()); i++){
+			Set<String> aps = new HashSet<>();
     		Map<String, Boolean> xs = new HashMap<>();
 			boolean[] bin_array_x = convertToBinary(i, c.getInputPortNames().size());
-			String[] input_arr_x = (String[])c.getInputPortNames().toArray();
+			String[] input_arr_x = c.getInputPortNames().toArray(new String[c.getInputPortNames().size()]);
 			for(int j=0; j<bin_array_x.length; j++) {
 				xs.put(input_arr_x[j], bin_array_x[j]);
 				if(bin_array_x[j])
 					aps.add(input_arr_x[j]);
 			}
-			Map<String, Boolean> rs = new HashMap<>();
-			for(int k=0; k<c.getRegisterNames().size(); k++) {
+			res.addAction(xs);
+			for(int k=0; k<Math.pow(2, c.getRegisterNames().size()); k++) {
+				Map<String, Boolean> rs = new HashMap<>();
 				boolean[] bin_array_reg = convertToBinary(k, c.getInputPortNames().size());
-				String[] input_arr_reg = (String[]) c.getRegisterNames().toArray();
+				String[] input_arr_reg = c.getRegisterNames().toArray(new String[c.getRegisterNames().size()]);
 				for (int l = 0; l < bin_array_reg.length; l++) {
 					rs.put(input_arr_reg[l], bin_array_reg[l]);
 					if (bin_array_reg[l])
 						aps.add(input_arr_reg[l]);
 				}
 				Map<String, Boolean> outputs = c.computeOutputs(xs, rs);
-				Pair<Map<String, Boolean>, Map<String, Boolean>> curr_state = new Pair<>(rs, outputs);
+				outputs.forEach((key,value) -> {if(value) aps.add(key); });
+				Pair<Map<String, Boolean>, Map<String, Boolean>> curr_state = new Pair<>(xs, rs);
 				res.addState(curr_state);
-				res.addAtomicProposition(aps);
-				res.addToLabel(curr_state, aps);
+				if(k == 0)
+					res.setInitial(curr_state, true);
+				for(String ap : aps)
+					res.addToLabel(curr_state, ap);
+				aps.removeAll(c.getRegisterNames());
+				aps.removeAll(c.getOutputPortNames());
 			}
 		}
 		for(Pair<Map<String, Boolean>, Map<String, Boolean>> state : res.getStates()){
-    		boolean isInitial = true;
-    		for(boolean val : state.second.values())
-				if(val)
-					isInitial = false;
-    		if(isInitial)
-    			res.setInitial(state, true);
+			for(int i=0; i<Math.pow(2, c.getInputPortNames().size()); i++){
+				Map<String, Boolean> xs = new HashMap<>();
+				boolean[] bin_array_x = convertToBinary(i, c.getInputPortNames().size());
+				String[] input_arr_x = c.getInputPortNames().toArray(new String[c.getInputPortNames().size()]);
+				for(int j=0; j<bin_array_x.length; j++) {
+					xs.put(input_arr_x[j], bin_array_x[j]);
+				}
+				Map<String, Boolean> registers = c.updateRegisters(state.getFirst(), state.getSecond());
+				Pair<Map<String, Boolean>, Map<String, Boolean>> to_state = getStatePair(res, xs, registers);
+				Transition<Pair<Map<String, Boolean>, Map<String, Boolean>>, Map<String, Boolean>> t = new Transition<>(
+						state, xs, to_state);
+				res.addTransition(t);
+			}
 		}
+
+		Set<Pair<Map<String, Boolean>, Map<String, Boolean>>> reach_states = reach(res);
+		for(Pair<Map<String, Boolean>, Map<String, Boolean>> state_pair : res.getStates())
+			if(!reach_states.contains(state_pair)) {
+				for (Transition<Pair<Map<String, Boolean>, Map<String, Boolean>>, Map<String, Boolean>> t : res.getTransitions())
+					if (t.getFrom().equals(state_pair) || t.getTo().equals(state_pair))
+						res.removeTransition(t);
+				Set<Object> labels = res.getLabel(state_pair);
+				for(Object label : labels)
+					res.removeLabel(state_pair, label);
+				res.removeState(state_pair);
+			}
+
+		return res;
     }
 
     @Override
     public <L, A> TransitionSystem<Pair<L, Map<String, Object>>, A, String> transitionSystemFromProgramGraph(ProgramGraph<L, A> pg, Set<ActionDef> actionDefs, Set<ConditionDef> conditionDefs) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement transitionSystemFromProgramGraph
+        TransitionSystem<Pair<L, Map<String, Object>>, A, String> ts = new TransitionSystemImpl<>();
+		for(L loc : pg.getLocations())
+			for (List<String> ass : pg.getInitalizations()) {
+				Map<String, Object> var_inits = new HashMap<>();
+				for (String s : ass) {
+					String[] var_val = s.split(":=");
+					var_inits.put(var_val[0], var_val[1]);
+				}
+				ts.addState(new Pair<L, Map<String, Object>>(loc, var_inits));
+			}
+
+
     }
 
     @Override
