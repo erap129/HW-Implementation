@@ -10,6 +10,7 @@ import il.ac.bgu.cs.fvm.exceptions.StateNotFoundException;
 import il.ac.bgu.cs.fvm.ltl.LTL;
 import il.ac.bgu.cs.fvm.programgraph.ActionDef;
 import il.ac.bgu.cs.fvm.programgraph.ConditionDef;
+import il.ac.bgu.cs.fvm.programgraph.PGTransition;
 import il.ac.bgu.cs.fvm.programgraph.ProgramGraph;
 import il.ac.bgu.cs.fvm.transitionsystem.AlternatingSequence;
 import il.ac.bgu.cs.fvm.transitionsystem.Transition;
@@ -215,6 +216,13 @@ public class FvmFacadeImpl implements FvmFacade {
     			return state_pair;
     	return null;
     }
+
+	private <L1, L2> Pair<L1, L2> getLocPair(ProgramGraph<Pair<L1, L2>, ?> pg, L1 l1, L2 l2){
+		for(Pair <L1, L2> loc_pair : pg.getLocations())
+			if(loc_pair.first.equals(l1) && loc_pair.second.equals(l2))
+				return loc_pair;
+		return null;
+	}
     
 	@Override
     public <S1, S2, A, P> TransitionSystem<Pair<S1, S2>, A, P> interleave(TransitionSystem<S1, A, P> ts1, TransitionSystem<S2, A, P> ts2) {
@@ -330,12 +338,37 @@ public class FvmFacadeImpl implements FvmFacade {
 
     @Override
     public <L, A> ProgramGraph<L, A> createProgramGraph() {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement createProgramGraph
+        return new ProgramGraphImpl<>();
     }
 
     @Override
     public <L1, L2, A> ProgramGraph<Pair<L1, L2>, A> interleave(ProgramGraph<L1, A> pg1, ProgramGraph<L2, A> pg2) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement interleave
+		ProgramGraph<Pair<L1, L2>, A> pg = new ProgramGraphImpl<>();
+		for(L1 l1 : pg1.getLocations())
+			for(L2 l2 : pg2.getLocations()){
+				Pair<L1, L2> loc_pair = new Pair<>(l1, l2);
+				pg.addLocation(loc_pair);
+				if(pg1.getInitialLocations().contains(l1) && pg2.getInitialLocations().contains(l2))
+					pg.setInitial(loc_pair, true);
+			}
+
+		for(PGTransition<L1, A> t : pg1.getTransitions())
+			for(Pair<L1, L2> loc_pair : pg.getLocations())
+				if(t.getFrom().equals(loc_pair.first))
+					for(Pair<L1, L2> to_loc_pair : pg.getLocations())
+						if(to_loc_pair.first.equals(t.getTo()) && loc_pair.second.equals(to_loc_pair.second))
+							pg.addTransition(new PGTransition<>(getLocPair(pg, loc_pair.first, loc_pair.second), t.getCondition(),
+									t.getAction(), getLocPair(pg, to_loc_pair.first, to_loc_pair.second)));
+
+		for(PGTransition<L2, A> t : pg2.getTransitions())
+			for(Pair<L1, L2> loc_pair : pg.getLocations())
+				if(t.getFrom().equals(loc_pair.second))
+					for(Pair<L1, L2> to_loc_pair : pg.getLocations())
+						if(to_loc_pair.second.equals(t.getTo()) && loc_pair.first.equals(to_loc_pair.first))
+							pg.addTransition(new PGTransition<>(getLocPair(pg, loc_pair.first, loc_pair.second), t.getCondition(),
+									t.getAction(), getLocPair(pg, to_loc_pair.first, to_loc_pair.second)));
+
+		return pg;
     }
 
 	private boolean[] convertToBinary(int no, int num_of_inputs){
@@ -421,20 +454,55 @@ public class FvmFacadeImpl implements FvmFacade {
 		return res;
     }
 
+    private <L, A> void addAllTransitions(ProgramGraph<L, A> pg, TransitionSystem<Pair<L, Map<String, Object>>, A, String> ts,
+										  L curr_loc, Pair<L, Map<String, Object>> curr_state, ActionDef actiondef, ConditionDef conditionDef){
+		for(PGTransition<L, A> t : pg.getTransitions()){
+			if(t.getFrom().equals(curr_loc) && conditionDef.evaluate(curr_state.second, t.getCondition())) {
+				Pair<L, Map<String, Object>> to_state = new Pair<>(t.getTo(), actiondef.effect(curr_state.second, t.getAction()));
+				ts.addState(to_state);
+				Transition<Pair<L, Map<String, Object>>, A> state_trans = new Transition<>(
+						curr_state, t.getAction(), to_state
+				);
+				ts.addTransition(state_trans);
+				ts.addAtomicProposition(t.getTo().toString());
+				ts.addToLabel(to_state, t.getTo().toString());
+				to_state.getSecond().forEach((key, value) -> {ts.addAtomicProposition(key + " = " + value);});
+				Iterator it = to_state.getSecond().entrySet().iterator();
+				while (it.hasNext()) {
+					Map.Entry pair = (Map.Entry)it.next();
+					ts.addToLabel(to_state, pair.getKey() + " = " + pair.getValue());
+				}
+				curr_state = to_state;
+				curr_loc = t.getTo();
+				addAllTransitions(pg, ts, curr_loc, curr_state, actiondef, conditionDef);
+			}
+		}
+	}
+
     @Override
     public <L, A> TransitionSystem<Pair<L, Map<String, Object>>, A, String> transitionSystemFromProgramGraph(ProgramGraph<L, A> pg, Set<ActionDef> actionDefs, Set<ConditionDef> conditionDefs) {
         TransitionSystem<Pair<L, Map<String, Object>>, A, String> ts = new TransitionSystemImpl<>();
-		for(L loc : pg.getLocations())
+		for(PGTransition<L, A> t : pg.getTransitions())
+			ts.addAction(t.getAction());
+		for(L loc : pg.getInitialLocations())
 			for (List<String> ass : pg.getInitalizations()) {
 				Map<String, Object> var_inits = new HashMap<>();
 				for (String s : ass) {
 					String[] var_val = s.split(":=");
-					var_inits.put(var_val[0], var_val[1]);
+					var_inits.put(var_val[0], Integer.parseInt(var_val[1]));
 				}
-				ts.addState(new Pair<L, Map<String, Object>>(loc, var_inits));
+				Pair<L, Map<String, Object>> state = new Pair<>(loc, var_inits);
+				ts.addState(state);
+				ts.addAtomicProposition(loc.toString());
+				ts.addToLabel(state, loc.toString());
+				state.getSecond().forEach((key, value) -> {ts.addAtomicProposition(key + " = " + value);
+															ts.addToLabel(state, key + " = " + value);});
+				ts.setInitial(state, true);
+				Pair<L, Map<String, Object>> curr_state = state;
+				L curr_loc = loc;
+				addAllTransitions(pg, ts, curr_loc, curr_state, actionDefs.iterator().next(), conditionDefs.iterator().next());
 			}
-
-
+		return ts;
     }
 
     @Override

@@ -12,7 +12,6 @@ import java.util.*;
 public class ProgramGraphImpl<L, A> implements ProgramGraph<L, A> {
 
     private Map<L, Boolean> loc = new HashMap<L, Boolean>();
-    private Set<A> act = new HashSet<>();
     private Set<List<String>> vars = new HashSet<>();
     private Set<PGTransition<L, A>> transitions = new HashSet<>();
     private String name;
