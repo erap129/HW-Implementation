@@ -40,7 +40,8 @@ public class TransitionSystemImpl<STATE, ACTION, ATOMIC_PROPOSITION> implements 
 
 	@Override
 	public void addState(STATE state) {
-		states.put(state, new Tuple<Boolean, Set<ATOMIC_PROPOSITION>>(false, new HashSet<ATOMIC_PROPOSITION>()));
+		if(!states.containsKey(state))
+			states.put(state, new Tuple<Boolean, Set<ATOMIC_PROPOSITION>>(false, new HashSet<ATOMIC_PROPOSITION>()));
 	}
 
 	@Override

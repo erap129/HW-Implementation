@@ -344,6 +344,13 @@ public class FvmFacadeImpl implements FvmFacade {
     @Override
     public <L1, L2, A> ProgramGraph<Pair<L1, L2>, A> interleave(ProgramGraph<L1, A> pg1, ProgramGraph<L2, A> pg2) {
 		ProgramGraph<Pair<L1, L2>, A> pg = new ProgramGraphImpl<>();
+		for(List<String> init1 : pg1.getInitalizations())
+			for(List<String> init2 : pg2.getInitalizations()) {
+				List<String> combinedInit = new LinkedList<>();
+				combinedInit.addAll(init1);
+				combinedInit.addAll(init2);
+				pg.addInitalization(combinedInit);
+			}
 		for(L1 l1 : pg1.getLocations())
 			for(L2 l2 : pg2.getLocations()){
 				Pair<L1, L2> loc_pair = new Pair<>(l1, l2);
@@ -455,7 +462,11 @@ public class FvmFacadeImpl implements FvmFacade {
     }
 
     private <L, A> void addAllTransitions(ProgramGraph<L, A> pg, TransitionSystem<Pair<L, Map<String, Object>>, A, String> ts,
-										  L curr_loc, Pair<L, Map<String, Object>> curr_state, ActionDef actiondef, ConditionDef conditionDef){
+										  L curr_loc, Pair<L, Map<String, Object>> curr_state, ActionDef actiondef, ConditionDef conditionDef,
+										  Set<Pair<L, Map<String, Object>>> allStates){
+
+		List<L> recursionLocs = new LinkedList<>();
+		List<Pair<L, Map<String, Object>>> recursionStates = new LinkedList<>();
 		for(PGTransition<L, A> t : pg.getTransitions()){
 			if(t.getFrom().equals(curr_loc) && conditionDef.evaluate(curr_state.second, t.getCondition())) {
 				Pair<L, Map<String, Object>> to_state = new Pair<>(t.getTo(), actiondef.effect(curr_state.second, t.getAction()));
@@ -472,9 +483,18 @@ public class FvmFacadeImpl implements FvmFacade {
 					Map.Entry pair = (Map.Entry)it.next();
 					ts.addToLabel(to_state, pair.getKey() + " = " + pair.getValue());
 				}
-				curr_state = to_state;
-				curr_loc = t.getTo();
-				addAllTransitions(pg, ts, curr_loc, curr_state, actiondef, conditionDef);
+				recursionLocs.add(t.getTo());
+				recursionStates.add(to_state);
+			}
+		}
+		for(int i=0; i<recursionLocs.size(); i++){
+			boolean found = false;
+			for(Pair<L, Map<String, Object>> state : allStates)
+				if(state.toString().equals(recursionStates.get(i).toString()))
+					found = true;
+			if(!found){
+				allStates.add(recursionStates.get(i));
+				addAllTransitions(pg, ts, recursionLocs.get(i), recursionStates.get(i), actiondef, conditionDef, allStates);
 			}
 		}
 	}
@@ -497,10 +517,11 @@ public class FvmFacadeImpl implements FvmFacade {
 				ts.addToLabel(state, loc.toString());
 				state.getSecond().forEach((key, value) -> {ts.addAtomicProposition(key + " = " + value);
 															ts.addToLabel(state, key + " = " + value);});
-				ts.setInitial(state, true);
 				Pair<L, Map<String, Object>> curr_state = state;
 				L curr_loc = loc;
-				addAllTransitions(pg, ts, curr_loc, curr_state, actionDefs.iterator().next(), conditionDefs.iterator().next());
+				addAllTransitions(pg, ts, curr_loc, curr_state, actionDefs.iterator().next(), conditionDefs.iterator().next(),
+						new HashSet<Pair<L, Map<String, Object>>>());
+				ts.setInitial(state, true);
 			}
 		return ts;
     }
