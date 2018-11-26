@@ -4,14 +4,12 @@ import il.ac.bgu.cs.fvm.FvmFacade;
 import il.ac.bgu.cs.fvm.automata.Automaton;
 import il.ac.bgu.cs.fvm.automata.MultiColorAutomaton;
 import il.ac.bgu.cs.fvm.channelsystem.ChannelSystem;
+import il.ac.bgu.cs.fvm.channelsystem.ParserBasedInterleavingActDef;
 import il.ac.bgu.cs.fvm.circuits.Circuit;
 import il.ac.bgu.cs.fvm.exceptions.ActionNotFoundException;
 import il.ac.bgu.cs.fvm.exceptions.StateNotFoundException;
 import il.ac.bgu.cs.fvm.ltl.LTL;
-import il.ac.bgu.cs.fvm.programgraph.ActionDef;
-import il.ac.bgu.cs.fvm.programgraph.ConditionDef;
-import il.ac.bgu.cs.fvm.programgraph.PGTransition;
-import il.ac.bgu.cs.fvm.programgraph.ProgramGraph;
+import il.ac.bgu.cs.fvm.programgraph.*;
 import il.ac.bgu.cs.fvm.transitionsystem.AlternatingSequence;
 import il.ac.bgu.cs.fvm.transitionsystem.Transition;
 import il.ac.bgu.cs.fvm.transitionsystem.TransitionSystem;
@@ -461,6 +459,96 @@ public class FvmFacadeImpl implements FvmFacade {
 		return res;
     }
 
+	private <L, A> void addAllTransitions(ChannelSystem<L, A> cs, TransitionSystem<Pair<List<L>, Map<String, Object>>, A, String> ts, List<L> curr_loc,
+										  Pair<List<L>, Map<String, Object>> curr_state, HashSet<Pair<List<L>, Map<String, Object>>> allStates,
+										  ActionDef csActionDef, ActionDef pgActionDef, ConditionDef condDef) {
+		List<List<L>> recursionLocs = new LinkedList<>();
+		List<Pair<List<L>, Map<String, Object>>> recursionStates = new LinkedList<>();
+		for(int pgnum = 0; pgnum < cs.getProgramGraphs().size(); pgnum++){
+			ProgramGraph<L, A> pg = cs.getProgramGraphs().get(pgnum);
+			for(PGTransition<L, A> t : pg.getTransitions()) {
+				if (t.getFrom().equals(curr_loc.get(pgnum)) && condDef.evaluate(curr_state.second, t.getCondition())){
+//						&& pgActionDef.effect(curr_state.second, t.getAction()) != null) {
+					if(!t.getAction().toString().startsWith("_") && pgActionDef.effect(curr_state.second, t.getAction()) != null){
+						List<L> newLocs = new LinkedList<>(curr_loc);
+						newLocs.set(pgnum, t.getTo());
+						Pair<List<L>, Map<String, Object>> to_state = new Pair<>(newLocs, pgActionDef.effect(curr_state.second, t.getAction()));
+						ts.addState(to_state);
+						Transition<Pair<List<L>, Map<String, Object>>, A> state_trans = new Transition<>(
+								curr_state, t.getAction(), to_state
+						);
+						ts.addTransition(state_trans);
+						for(int i=0; i<curr_state.first.size(); i++)
+							if(i != pgnum)
+								ts.addToLabel(to_state, curr_state.first.get(i).toString());
+						ts.addAtomicProposition(t.getTo().toString());
+						ts.addToLabel(to_state, t.getTo().toString());
+						to_state.getSecond().forEach((key, value) -> {
+							ts.addAtomicProposition(key + " = " + value);
+						});
+						Iterator it = to_state.getSecond().entrySet().iterator();
+						while (it.hasNext()) {
+							Map.Entry pair = (Map.Entry)it.next();
+							ts.addToLabel(to_state, pair.getKey() + " = " + pair.getValue());
+						}
+						recursionLocs.add(newLocs);
+						recursionStates.add(to_state);
+					}
+					else{ // handshake operation
+						for(int pgnum2 = 0; pgnum2 < cs.getProgramGraphs().size(); pgnum2++){
+							ProgramGraph<L, A> pg2 = cs.getProgramGraphs().get(pgnum);
+							for(PGTransition<L, A> t2 : pg2.getTransitions()) {
+								String t1Act = t.getAction().toString();
+								String t2Act = t2.getAction().toString();
+								if(pgnum != pgnum2 && t2Act.length() > 1 && t2Act.substring(0,2).equals(t1Act.substring(0,2)) &&
+										((t1Act.charAt(2) == '?' && t2Act.charAt(2) == '!') || (t1Act.charAt(2) == '!' && t2Act.charAt(2) == '?'))
+										){
+									List<L> newLocs = new LinkedList<>(curr_loc);
+									newLocs.set(pgnum, t.getTo());
+									newLocs.set(pgnum2, t2.getTo());
+									Pair<List<L>, Map<String, Object>> to_state = new Pair<>(newLocs, csActionDef.effect(curr_state.second, t.getAction() + " | " + t2.getAction()));
+									ts.addState(to_state);
+									Transition<Pair<List<L>, Map<String, Object>>, A> state_trans = new Transition<>(
+											curr_state, t.getAction(), to_state
+									);
+									ts.addTransition(state_trans);
+									for(int i=0; i<curr_state.first.size(); i++)
+										if(i != pgnum && i != pgnum2)
+											ts.addToLabel(to_state, curr_state.first.get(i).toString());
+									ts.addAtomicProposition(t.getTo().toString());
+									ts.addToLabel(to_state, t.getTo().toString());
+									ts.addAtomicProposition(t2.getTo().toString());
+									ts.addToLabel(to_state, t2.getTo().toString());
+									to_state.getSecond().forEach((key, value) -> {
+										ts.addAtomicProposition(key + " = " + value);
+									});
+									Iterator it = to_state.getSecond().entrySet().iterator();
+									while (it.hasNext()) {
+										Map.Entry pair = (Map.Entry)it.next();
+										ts.addToLabel(to_state, pair.getKey() + " = " + pair.getValue());
+									}
+									recursionLocs.add(newLocs);
+									recursionStates.add(to_state);
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		for(int i=0; i<recursionLocs.size(); i++){
+			boolean found = false;
+			for(Pair<List<L>, Map<String, Object>> state : allStates)
+				if(state.toString().equals(recursionStates.get(i).toString()))
+					found = true;
+			if(!found){
+				allStates.add(recursionStates.get(i));
+				addAllTransitions(cs, ts, recursionLocs.get(i), recursionStates.get(i), allStates, csActionDef,
+						pgActionDef, condDef);
+			}
+		}
+	}
+
     private <L, A> void addAllTransitions(ProgramGraph<L, A> pg, TransitionSystem<Pair<L, Map<String, Object>>, A, String> ts,
 										  L curr_loc, Pair<L, Map<String, Object>> curr_state, ActionDef actiondef, ConditionDef conditionDef,
 										  Set<Pair<L, Map<String, Object>>> allStates){
@@ -526,12 +614,66 @@ public class FvmFacadeImpl implements FvmFacade {
 		return ts;
     }
 
-    @Override
-    public <L, A> TransitionSystem<Pair<List<L>, Map<String, Object>>, A, String> transitionSystemFromChannelSystem(ChannelSystem<L, A> cs) {
-        throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement transitionSystemFromChannelSystem
-    }
+    private <L> Set<List<L>> cartesianProduct(int index, List<Set<L>> allLocs){
+    	Set<List<L>> ret = new HashSet<>();
+    	if(index == allLocs.size())
+    		ret.add(new LinkedList<L>());
+    	else{
+    		for(L loc : allLocs.get(index))
+				for(List<L> list : cartesianProduct(index+1, allLocs)){
+					list.add(loc);
+					ret.add(list);
+				}
+		}
+		return ret;
+	}
 
     @Override
+    public <L, A> TransitionSystem<Pair<List<L>, Map<String, Object>>, A, String> transitionSystemFromChannelSystem(ChannelSystem<L, A> cs) {
+		TransitionSystem<Pair<List<L>, Map<String, Object>>, A, String> ts = new TransitionSystemImpl<>();
+		List<Set<L>> allLocs = new LinkedList<>();
+		List<Map<String, Object>> all_inits = new LinkedList<>();
+		for(ProgramGraph<L, A> pg : cs.getProgramGraphs()) {
+			for (PGTransition<L, A> t : pg.getTransitions())
+				ts.addAction(t.getAction());
+			allLocs.add(pg.getInitialLocations());
+			for (List<String> ass : pg.getInitalizations()) {
+				Map<String, Object> var_inits = new HashMap<>();
+				for (String s : ass) {
+					String[] var_val = s.split(":=");
+					var_inits.put(var_val[0], Integer.parseInt(var_val[1]));
+				}
+				all_inits.add(var_inits);
+			}
+		}
+		Set<List<L>> initalLocs = cartesianProduct(0, allLocs);
+		Set<Pair<List<L>, Map<String, Object>>> initialStates = new HashSet<>();
+		for(List<L> initLoc: initalLocs)
+			if(all_inits.size() > 0)
+				for(Map<String, Object> var_inits : all_inits){
+					Pair<List<L>, Map<String, Object>> state = new Pair<>(initLoc, var_inits);
+					ts.addState(state);
+					initLoc.forEach((loc) -> {ts.addAtomicProposition(loc.toString()); ts.addToLabel(state, loc.toString());});
+					var_inits.forEach((key, value) -> {ts.addAtomicProposition(key + " = " + value);
+						ts.addToLabel(state, key + " = " + value);});
+					ts.setInitial(state, true);
+					addAllTransitions(cs, ts, initLoc, state, new HashSet<Pair<List<L>, Map<String, Object>>>(), new ParserBasedInterleavingActDef(), new ParserBasedActDef(),
+							new ParserBasedCondDef());
+				}
+			else{
+				Pair<List<L>, Map<String, Object>> state = new Pair<>(initLoc, new HashMap<>());
+				ts.addState(state);
+				ts.setInitial(state, true);
+				addAllTransitions(cs, ts, initLoc, state, new HashSet<Pair<List<L>, Map<String, Object>>>(), new ParserBasedInterleavingActDef(), new ParserBasedActDef(),
+						new ParserBasedCondDef());
+			}
+
+		return ts;
+    }
+
+
+
+	@Override
     public <Sts, Saut, A, P> TransitionSystem<Pair<Sts, Saut>, A, Saut> product(TransitionSystem<Sts, A, P> ts, Automaton<Saut, P> aut) {
         throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement product
     }
