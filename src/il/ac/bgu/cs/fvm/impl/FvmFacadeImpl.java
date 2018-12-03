@@ -818,18 +818,28 @@ public class FvmFacadeImpl implements FvmFacade {
                     trans = new PGTransition<>(root.stmt(0).getText() + ";" + root.stmt(1).getText(), t.getCondition(), t.getAction(), root.stmt(1).getText());
                 else {
                     trans = new PGTransition<>(root.stmt(0).getText() + ";" + root.stmt(1).getText(), t.getCondition(), t.getAction(), t.getTo() + ";" + root.stmt(1).getText());
-                    recursionThingy = NanoPromelaFileReader.pareseNanoPromelaString(t.getTo() + ";" + root.stmt(1).getText());
+					String modifyRecursionStr = modifyOd(t.getTo() + ";" + root.stmt(1).getText());
+                    recursionThingy = NanoPromelaFileReader.pareseNanoPromelaString(modifyRecursionStr);
                 }
                 addTransitions.add(trans);
             }
             for(PGTransition<String, String> t : addTransitions)
                 pg.addTransition(t);
-            if(recursionThingy != null)
-                addPromelaEdges(pg, recursionThingy, allEdges);
+            if(recursionThingy != null) {
+				addPromelaEdges(pg, recursionThingy, allEdges);
+			}
         }
 
     }
 
+    private String modifyOd(String s){
+		int index = s.indexOf("od");
+		while (index >= 0) {
+			s = s.substring(0, index) + " " + s.substring(index);
+			index = s.indexOf("od", index + 2);
+		}
+		return s;
+	}
     private void wipeProgramGraph(ProgramGraph<String, String> pg, Set<String> reachLocs){
 	    Set<PGTransition<String, String>> removeTrans = new HashSet<>();
 	    Set<String> removeLocs = new HashSet<>();
