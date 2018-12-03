@@ -125,6 +125,14 @@ public class FvmFacadeImpl implements FvmFacade {
     	return post(ts, s).size() == 0;
     }
 
+    private <L, A> Set<L> post(ProgramGraph<L, A> pg, L loc){
+        Set<L> res = new HashSet<>();
+        for (PGTransition<L, A> trans : pg.getTransitions())
+            if (trans.getFrom().equals(loc))
+                res.add(trans.getTo());
+        return res;
+    }
+
     @Override
     public <S> Set<S> post(TransitionSystem<S, ?, ?> ts, S s) throws StateNotFoundException{
     	checkState(ts, s);
@@ -203,12 +211,27 @@ public class FvmFacadeImpl implements FvmFacade {
     	res.addAll(ts.getInitialStates());
     	return res;
     }
+
+    private <L, A> Set<L> reach(ProgramGraph<L, A> pg){
+        Set<L> res = new HashSet<>();
+        for(L loc : pg.getInitialLocations())
+            addAllReachable(res, pg, loc);
+        res.addAll(pg.getInitialLocations());
+        return res;
+    }
     
     private <S, A> void addAllReachable(Set<S> res, TransitionSystem<S, A, ?> ts, S state){
     	for(S s : post(ts, state)){
     		if(res.add(s))
     			addAllReachable(res, ts, s);
     	}
+    }
+
+    private <L, A> void addAllReachable(Set<L> res, ProgramGraph<L, A> pg, L loc){
+        for(L l : post(pg, loc)){
+            if(res.add(l))
+                addAllReachable(res, pg, l);
+        }
     }
 
     private <S1, S2> Pair<S1, S2> getStatePair(TransitionSystem<Pair<S1, S2>, ?, ?> ts, S1 s1, S2 s2){
@@ -694,31 +717,148 @@ public class FvmFacadeImpl implements FvmFacade {
         throw new UnsupportedOperationException("Not supported yet."); // TODO: Implement programGraphFromNanoPromelaString
     }
 
-    private void addPromelaLocation(ProgramGraph<String, String> pg, NanoPromelaParser.StmtContext root){
-		pg.addLocation(root.getText());
+    private List<String> addPromelaLocation(NanoPromelaParser.StmtContext root){
+		List<String> res = new LinkedList<>();
     	if(root.assstmt() != null || root.chanreadstmt() != null || root.chanwritestmt() != null ||
 				root.atomicstmt() != null || root.skipstmt() != null){
-			pg.addLocation("");
+			res.add("");
+            res.add(root.getText());
 		}
 		else if(root.ifstmt() != null){
-			for(int i=1; i<root.children.size()-1; i++)
-				addPromelaLocation(pg, (NanoPromelaParser.StmtContext) root.getChild(i).getChild(3));
+            res.add(root.getText());
+			for(int i=1; i<root.getChild(0).getChildCount()-1; i++)
+				res.addAll(addPromelaLocation((NanoPromelaParser.StmtContext)root.getChild(0).getChild(i).getChild(3)));
 		}
 		else if(root.dostmt() != null){
-			for(int i=1; i<root.children.size()-1; i++)
-				addPromelaLocation(pg, (NanoPromelaParser.StmtContext) root.getChild(i).getChild(3));
-
+		    for(int i=1; i<root.getChild(0).getChildCount()-1; i++)
+                res.addAll(addPromelaLocation((NanoPromelaParser.StmtContext)root.getChild(0).getChild(i).getChild(3)));
+		    for(int i=0; i<res.size(); i++)
+		        if(!res.get(i).equals(""))
+		            res.set(i, res.get(i)+";"+root.getText());
+            res.add(root.getText());
 		}
 		else{
-			//addPromelaLocation();
+			res.addAll(addPromelaLocation((NanoPromelaParser.StmtContext)root.getChild(0)));
+            for(int i=0; i<res.size(); i++)
+                if(!res.get(i).equals(""))
+                    res.set(i, res.get(i)+";"+root.getChild(2).getText());
+            res.addAll(addPromelaLocation((NanoPromelaParser.StmtContext)root.getChild(2)));
 		}
-
+		return res;
 	}
+
+	private void addPromelaEdges(ProgramGraph<String, String> pg, NanoPromelaParser.StmtContext root, Set<String> allEdges){
+        if(allEdges.contains(root.getText()))
+            return;
+        else
+            allEdges.add(root.getText());
+        if(root.getText().equals("") || root == null)
+            return;
+        if(root.assstmt() != null || root.chanreadstmt() != null || root.chanwritestmt() != null ||
+                root.atomicstmt() != null || root.skipstmt() != null){
+            PGTransition<String, String> t = new PGTransition<>(root.getText(), "", root.getText(), "");
+            pg.addTransition(t);
+        }
+        else if(root.ifstmt() != null){
+            Set<PGTransition<String, String>> addTransitions = new HashSet<>();
+            for(NanoPromelaParser.OptionContext op : root.ifstmt().option()){
+                addPromelaEdges(pg, op.stmt(), allEdges);
+                for(PGTransition<String, String> t : pg.getTransitions())
+                    if(t.getFrom().equals(op.stmt().getText())){
+                        String cond = op.boolexpr().getText();
+                        if (!t.getCondition().equals(""))
+                            cond = "("+ cond + ") && (" + t.getCondition() + ")";
+                        else
+                            cond = "("+ cond + ")";
+                        PGTransition<String, String> trans = new PGTransition<>(root.getText(), cond, t.getAction(), t.getTo());
+                        addTransitions.add(trans);
+                    }
+            }
+            for(PGTransition<String, String> t : addTransitions)
+                pg.addTransition(t);
+        }
+        else if(root.dostmt() != null){
+            Set<PGTransition<String, String>> addTransitions = new HashSet<>();
+            String allNot = "";
+            for(NanoPromelaParser.OptionContext op : root.dostmt().option()){
+                if(allNot.equals(""))
+                    allNot += "(" + op.boolexpr().getText() +")";
+                else
+                    allNot += "|| (" + op.boolexpr().getText() +")";
+                addPromelaEdges(pg, op.stmt(), allEdges);
+                for(PGTransition<String, String> t : pg.getTransitions())
+                    if(t.getFrom().equals(op.stmt().getText())){
+                        String cond = op.boolexpr().getText();
+                        if (!t.getCondition().equals(""))
+                            cond = "("+ cond + ") && (" + t.getCondition() + ")";
+                        else
+                            cond = "("+ cond + ")";
+                        PGTransition<String, String> trans;
+                        if(t.getTo().equals(""))
+                            trans = new PGTransition<>(root.getText(), cond, t.getAction(), root.getText());
+                        else {
+                            trans = new PGTransition<>(root.getText(), cond, t.getAction(), t.getTo() + ";" + root.getText());
+                        }
+                        addTransitions.add(trans);
+                    }
+            }
+            addTransitions.add(new PGTransition(root.getText(), "!(" + allNot + ")", "",""));
+            for(PGTransition<String, String> t : addTransitions)
+                pg.addTransition(t);
+        }
+        else{
+            NanoPromelaParser.StmtContext recursionThingy = null;
+            Set<PGTransition<String, String>> addTransitions = new HashSet<>();
+            addPromelaEdges(pg, root.stmt(0), allEdges);
+            addPromelaEdges(pg, root.stmt(1), allEdges);
+            for(PGTransition<String, String> t : pg.getTransitions())
+            if(t.getFrom().equals(root.stmt(0).getText())) {
+                PGTransition<String, String> trans;
+                if (t.getTo().equals(("")))
+                    trans = new PGTransition<>(root.stmt(0).getText() + ";" + root.stmt(1).getText(), t.getCondition(), t.getAction(), root.stmt(1).getText());
+                else {
+                    trans = new PGTransition<>(root.stmt(0).getText() + ";" + root.stmt(1).getText(), t.getCondition(), t.getAction(), t.getTo() + ";" + root.stmt(1).getText());
+                    recursionThingy = NanoPromelaFileReader.pareseNanoPromelaString(t.getTo() + ";" + root.stmt(1).getText());
+                }
+                addTransitions.add(trans);
+            }
+            for(PGTransition<String, String> t : addTransitions)
+                pg.addTransition(t);
+            if(recursionThingy != null)
+                addPromelaEdges(pg, recursionThingy, allEdges);
+        }
+
+    }
+
+    private void wipeProgramGraph(ProgramGraph<String, String> pg, Set<String> reachLocs){
+	    Set<PGTransition<String, String>> removeTrans = new HashSet<>();
+	    Set<String> removeLocs = new HashSet<>();
+	    for(PGTransition<String, String> t : pg.getTransitions())
+	        if(!reachLocs.contains(t.getFrom()) || !reachLocs.contains(t.getTo()))
+	            removeTrans.add(t);
+        for(String loc : pg.getLocations())
+            if(!reachLocs.contains(loc))
+                removeLocs.add(loc);
+        for(PGTransition<String, String> t: removeTrans)
+            pg.removeTransition(t);
+        for(String loc : removeLocs)
+            pg.removeLocation(loc);
+    }
 
     @Override
     public ProgramGraph<String, String> programGraphFromNanoPromela(InputStream inputStream) throws Exception {
     	ProgramGraph<String, String> pg = new ProgramGraphImpl<>();
-		addPromelaLocation(pg, NanoPromelaFileReader.parseNanoPromelaStream(inputStream));
+        NanoPromelaParser.StmtContext root = NanoPromelaFileReader.parseNanoPromelaStream(inputStream);
+		List<String> subs = addPromelaLocation(root);
+        Set<String> sub_set = new HashSet<>();
+        sub_set.addAll(subs);
+		for(String sub: sub_set)
+		    pg.addLocation(sub);
+		pg.setInitial(root.getText(), true);
+		Set<String> allEdges = new HashSet<>();
+		addPromelaEdges(pg, root, allEdges);
+		Set<String> reachLocs = reach(pg);
+		wipeProgramGraph(pg, reachLocs);
 		return pg;
     }
 
